@@ -24,11 +24,18 @@ struct Operator {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
+enum SymbolKind {
+    Function,
+}
+
+
+#[derive(Debug, PartialEq, Clone)]
 enum Token {
     Number(f32),
     OpenParen,
     CloseParen,
     Operator(Operator),
+    Symbol(String, SymbolKind),
 }
 
 #[derive(Debug, Clone)]
@@ -67,16 +74,27 @@ impl<Chars: Iterator<Item=char>> Iterator for Lexer<Chars> {
                 },
                 _ => {
                     let mut dot_seen = false;
-                    if !x.is_numeric(){
-                        panic!("Unexpected token found during lexing.");
-                    }
-                    while let Some(y) = self.chars.next_if(|x : &char| x.is_numeric() || (*x == '.' && dot_seen == false)) {
-                        if y == '.' {
-                            dot_seen = true;
+                    if x.is_numeric() {
+                        while let Some(y) = self.chars.next_if(|x : &char| x.is_numeric() || (*x == '.' && dot_seen == false)) {
+                            if y == '.' {
+                                dot_seen = true;
+                            }
+                            text.push(y);
                         }
-                        text.push(y);
+                        Some(Token::Number(text.parse::<f32>().unwrap()))
+                    } else if x.is_alphabetic() {
+                        while let Some(y) = self.chars.next_if(|x : &char| x.is_alphanumeric()) {
+                            text.push(y);
+                        }
+                        if self.chars.peek() == Some(&'(') {
+                            Some(Token::Symbol(text, SymbolKind::Function))
+                        }
+                        else {
+                            None
+                        }
+                    } else {
+                        None
                     }
-                    Some(Token::Number(text.parse::<f32>().unwrap()))
                 },
             }
         } else {
@@ -116,6 +134,13 @@ fn shunting_yard(lexer: impl Iterator<Item=Token>) -> VecDeque<Token> {
                     panic!("No OpenParen found while parsing.");
                 }
                 else { op_stack.pop() };
+            },
+            Token::Symbol(_, k) => {
+                match k {
+                    SymbolKind::Function => {
+                        op_stack.push(token);
+                    }
+                }
             }
         }
     }
@@ -159,6 +184,19 @@ fn evaluate_expression(tokens: VecDeque<Token>) -> Token {
                         s.push(left / right);
                     },
                 }
+            },
+            Token::Symbol(n, k) => {
+                match k {
+                    SymbolKind::Function => {
+                        match n.as_str() {
+                            "sqr" => {
+                                let argument = s.pop().unwrap();
+                                s.push(argument*argument);
+                            }
+                            _ => panic!("Found unexpected token during evaluation."),
+                        }
+                    }
+                }
             }
             _ => panic!("Found unexpected token during evaluation."),
         }
@@ -172,15 +210,34 @@ fn test_lexer() {
     assert_eq!(tokens, vec![]);
     tokens = Lexer::from_iter("1 + 12 ".to_string().chars()).collect();
     assert_eq!(tokens, vec![Token::Number(1.0), Token::Operator(Operator {kind: OperatorKind::Plus, precedence: 2, assoc: Assoc::Left}), Token::Number(12.0)]);
+    tokens = Lexer::from_iter("1 + sin(12)".to_string().chars()).collect();
+    for token in &tokens {
+        println!("{:?}", token);
+    }
+    assert_eq!(tokens, vec![Token::Number(1.0), Token::Operator(Operator {kind: OperatorKind::Plus, precedence: 2, assoc: Assoc::Left}), Token::Symbol("sin".to_string(), SymbolKind::Function), Token::OpenParen, Token::Number(12.0), Token::CloseParen]);
+    tokens = Lexer::from_iter("1 + sin".to_string().chars()).collect();
+    assert_eq!(tokens, vec![Token::Number(1.0), Token::Operator(Operator {kind: OperatorKind::Plus, precedence: 2, assoc: Assoc::Left})]);
 }
 
 #[test]
 fn test_eval() {
-    let expr = "((1+2) - 7 * (5    -2) - 1)/2".to_string();
-    let lexed = Lexer::from_iter(expr.chars());
-    let parsed = shunting_yard(lexed);
-    let evaluated = evaluate_expression(parsed);
-    assert_eq!(evaluated, Token::Number(-9.5));
+    let mut expr = "((1+2) - 7 * (5    -2) - 1)/4".to_string();
+    let mut lexed = Lexer::from_iter(expr.chars());
+    let mut parsed = shunting_yard(lexed);
+    let mut evaluated = evaluate_expression(parsed);
+    assert_eq!(evaluated, Token::Number(-4.75));
+
+    expr = "sqr(2)".to_string();
+    lexed = Lexer::from_iter(expr.chars());
+    parsed = shunting_yard(lexed);
+    evaluated = evaluate_expression(parsed);
+    assert_eq!(evaluated, Token::Number(4.0));
+
+    expr = "((1+2) - 7 * (5    -2) - 1)/sqr(2)".to_string();
+    lexed = Lexer::from_iter(expr.chars());
+    parsed = shunting_yard(lexed);
+    evaluated = evaluate_expression(parsed);
+    assert_eq!(evaluated, Token::Number(-4.75));
 }
 
 fn main() {
